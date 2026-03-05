@@ -15,6 +15,27 @@ st.write("Upload an Excel file containing return data and benchmark data. Only n
 os.makedirs('data', exist_ok=True)
 db_path = 'data/performance_data.db'
 
+# --- Database Management ---
+with st.sidebar:
+    st.header("Database Settings")
+    if st.button("Clear Database", type="primary"):
+        try:
+            # Connect specifically to drop the table
+            clear_conn = sqlite3.connect(db_path)
+            cursor = clear_conn.cursor()
+            cursor.execute("DROP TABLE IF EXISTS performance")
+            clear_conn.commit()
+            clear_conn.close()
+            
+            # Reset session state
+            if "uploaded_data" in st.session_state:
+                del st.session_state["uploaded_data"]
+                
+            st.success("Database successfully cleared!")
+            st.rerun() # Refresh the app to show the empty state
+        except Exception as e:
+            st.error(f"Error clearing database: {e}")
+
 # --- File Upload & Processing ---
 uploaded_file = st.file_uploader("Upload Excel File", type=["xlsx", "xls"])
 
@@ -97,16 +118,16 @@ try:
     # User Selection
     all_cols = df_merged.columns.tolist()
     
-    # Try to guess default funds/BMs based on column names, else empty
-    default_funds = [c for c in all_cols if 'bm' not in c.lower() and 'rf' not in c.lower() and 'risk' not in c.lower()]
-    default_bms = [c for c in all_cols if 'bm' in c.lower() or 'benchmark' in c.lower()]
+    # Try to guess default RFs, but leave funds and BMs empty by default
     default_rfs = [c for c in all_cols if 'rf' in c.lower() or 'risk' in c.lower()]
     
     col1, col2, col3 = st.columns(3)
     with col1:
-        selected_funds = st.multiselect("Select Funds to Analyze", options=all_cols, default=default_funds[:min(3, len(default_funds))])
+        # Default changed to [] so nothing auto-selects
+        selected_funds = st.multiselect("Select Funds to Analyze", options=all_cols, default=[])
     with col2:
-        selected_bms = st.multiselect("Select Benchmarks to Analyze", options=all_cols, default=default_bms[:min(1, len(default_bms))])
+        # Default changed to [] so nothing auto-selects
+        selected_bms = st.multiselect("Select Benchmarks to Analyze", options=all_cols, default=[])
     with col3:
         rf_options = ["None"] + all_cols
         default_rf_val = default_rfs[0] if default_rfs else "None"
@@ -378,12 +399,35 @@ try:
             else: st.info("No data available.")
 
         
+        # --- Cumulative Growth Chart (Base 100) ---
+        st.markdown("---")
+        st.subheader("Cumulative Growth (Inception to Date)")
+        
+        index_df = pd.DataFrame(index=df_merged.index)
+        cols_to_plot = selected_funds + selected_bms
+        
+        for col in cols_to_plot:
+            s = df_merged[col].dropna()
+            if not s.empty:
+                # Calculate base 100 series starting from the asset's specific inception
+                index_df[col] = 100 * (1 + s).cumprod()
+                
+        if not index_df.empty:
+            # Forward fill to handle slightly misaligned dates nicely on the plot
+            index_df = index_df.ffill()
+            plot_idx_df = index_df.reset_index().melt(id_vars='Date', var_name='Asset', value_name='Index Value')
+            
+            fig_idx = px.line(plot_idx_df, x='Date', y='Index Value', color='Asset', 
+                              title="Growth of 100 (ITD)", 
+                              labels={'Index Value': 'Value (Base 100)'},
+                              template="plotly_dark")
+            st.plotly_chart(fig_idx, use_container_width=True)
+
         # --- Maximum Drawdown Chart ---
         st.markdown("---")
         st.subheader("Maximum Drawdown Over Time")
         
         dd_df = pd.DataFrame(index=df_merged.index)
-        cols_to_plot = selected_funds + selected_bms
         
         for col in cols_to_plot:
             s = df_merged[col].dropna()
@@ -395,20 +439,19 @@ try:
                 
         if not dd_df.empty:
             # Reset index for plotly
-            plot_df = dd_df.reset_index().melt(id_vars='Date', var_name='Asset', value_name='Drawdown')
-            fig = px.line(plot_df, x='Date', y='Drawdown', color='Asset', 
-                          title="Historical Drawdown", 
-                          labels={'Drawdown': 'Drawdown %'},
-                          template="plotly_dark")
+            plot_dd_df = dd_df.reset_index().melt(id_vars='Date', var_name='Asset', value_name='Drawdown')
+            fig_dd = px.line(plot_dd_df, x='Date', y='Drawdown', color='Asset', 
+                             title="Historical Drawdown", 
+                             labels={'Drawdown': 'Drawdown %'},
+                             template="plotly_dark")
             # Format y-axis as percentage
-            fig.update_layout(yaxis_tickformat='.1%')
-            st.plotly_chart(fig, use_container_width=True)
+            fig_dd.update_layout(yaxis_tickformat='.1%')
+            st.plotly_chart(fig_dd, use_container_width=True)
 
     else:
         st.info("Select funds or benchmarks to view analytics.")
 
 except Exception as e:
-    # Table probably doesn't exist yet
     st.error(f"Error calculating metrics: {e}")
 finally:
     # Check if conn is connected before trying to close
