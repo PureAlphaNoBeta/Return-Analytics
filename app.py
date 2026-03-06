@@ -302,49 +302,42 @@ try:
             return metrics_df
 
         with tab_metrics:
-            t_ytd, t_1y, t_3y, t_5y, t_10y, t_itd = st.tabs(["YTD", "1 Year", "3 Year", "5 Year", "10 Year", "ITD"])
+            time_horizon = st.radio(
+                "Select Time Horizon",
+                ["YTD", "1 Year", "3 Year", "5 Year", "10 Year", "ITD"],
+                horizontal=True
+            )
 
-            with t_ytd:
-                df_ytd = generate_metrics_df('YTD')
-                if df_ytd is not None and not df_ytd.empty:
-                    st.dataframe(df_ytd, use_container_width=True)
-                    st.download_button("Download YTD Metrics", convert_df_to_csv(df_ytd), "metrics_ytd.csv", "text/csv", key="dl_ytd")
-                else: st.info("Not enough data for YTD analysis.")
+            if time_horizon == "YTD":
+                df_metrics = generate_metrics_df('YTD')
+                dl_key = "dl_ytd"
+            elif time_horizon == "1 Year":
+                df_metrics = generate_metrics_df(12)
+                dl_key = "dl_1y"
+            elif time_horizon == "3 Year":
+                df_metrics = generate_metrics_df(36)
+                dl_key = "dl_3y"
+            elif time_horizon == "5 Year":
+                df_metrics = generate_metrics_df(60)
+                dl_key = "dl_5y"
+            elif time_horizon == "10 Year":
+                df_metrics = generate_metrics_df(120)
+                dl_key = "dl_10y"
+            else: # ITD
+                df_metrics = generate_metrics_df(None)
+                dl_key = "dl_itd"
 
-            with t_1y:
-                df_1y = generate_metrics_df(12)
-                if df_1y is not None and not df_1y.empty:
-                    st.dataframe(df_1y, use_container_width=True)
-                    st.download_button("Download 1-Year Metrics", convert_df_to_csv(df_1y), "metrics_1y.csv", "text/csv", key="dl_1y")
-                else: st.info("Not enough data for 1-Year analysis.")
-
-            with t_3y:
-                df_3y = generate_metrics_df(36)
-                if df_3y is not None and not df_3y.empty:
-                    st.dataframe(df_3y, use_container_width=True)
-                    st.download_button("Download 3-Year Metrics", convert_df_to_csv(df_3y), "metrics_3y.csv", "text/csv", key="dl_3y")
-                else: st.info("Not enough data for 3-Year analysis.")
-
-            with t_5y:
-                df_5y = generate_metrics_df(60)
-                if df_5y is not None and not df_5y.empty:
-                    st.dataframe(df_5y, use_container_width=True)
-                    st.download_button("Download 5-Year Metrics", convert_df_to_csv(df_5y), "metrics_5y.csv", "text/csv", key="dl_5y")
-                else: st.info("Not enough data for 5-Year analysis.")
-
-            with t_10y:
-                df_10y = generate_metrics_df(120)
-                if df_10y is not None and not df_10y.empty:
-                    st.dataframe(df_10y, use_container_width=True)
-                    st.download_button("Download 10-Year Metrics", convert_df_to_csv(df_10y), "metrics_10y.csv", "text/csv", key="dl_10y")
-                else: st.info("Not enough data for 10-Year analysis.")
-
-            with t_itd:
-                df_itd = generate_metrics_df(None)
-                if df_itd is not None and not df_itd.empty:
-                    st.dataframe(df_itd, use_container_width=True)
-                    st.download_button("Download ITD Metrics", convert_df_to_csv(df_itd), "metrics_itd.csv", "text/csv", key="dl_itd")
-                else: st.info("No data available.")
+            if df_metrics is not None and not df_metrics.empty:
+                st.dataframe(df_metrics, use_container_width=True)
+                st.download_button(
+                    f"Download {time_horizon} Metrics",
+                    convert_df_to_csv(df_metrics),
+                    f"metrics_{time_horizon.replace(' ', '_').lower()}.csv",
+                    "text/csv",
+                    key=dl_key
+                )
+            else:
+                st.info(f"Not enough data for {time_horizon} analysis.")
 
         with tab_growth:
             # --- Interactive Charting Section ---
