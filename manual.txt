@@ -1,0 +1,49 @@
+HEDGE FUND PERFORMANCE DASHBOARD - DATA UPLOAD MANUAL
+=====================================================
+
+This document outlines how to format your Excel (.xlsx) file so the dashboard can correctly parse and categorize your hedge fund data (Returns, Benchmarks, Exposures, and Risk-Free Rates).
+
+1. EXCEL TABS (SHEET NAMES)
+-----------------------------------------------------
+The application automatically categorizes data by looking for specific keywords in the names of your Excel sheets (tabs).
+
+** REQUIRED SHEETS **
+Your file MUST contain at least two sheets with these keywords:
+* Returns Sheet: Must contain the word "return" (e.g., "Returns", "Fund Returns", "Monthly Return")
+* Benchmark Sheet: Must contain the word "bm" or "benchmark" (e.g., "BM", "Benchmarks", "SP500 BM")
+
+** OPTIONAL SHEETS **
+* Exposures Sheet: Must contain the word "exp" or "exposure" (e.g., "Exposures", "Fund Exp", "Net Gross Exposure")
+* Risk-Free Rate Sheet: Must contain "rf", "risk free", or "risk-free" (e.g., "RF", "Risk Free Rate")
+
+2. DATA STRUCTURE WITHIN SHEETS
+-----------------------------------------------------
+Every sheet must follow the exact same tabular structure:
+* Column A (Row 1): Should contain "Date"
+* Column A (Rows 2+): Must be Date values (e.g., 1/31/2023, 2/28/2023). Ensure these are formatted as Dates in Excel.
+* Columns B, C, D... (Row 1): The names of the specific assets/metrics (e.g., "Fund A", "SP500", "Fund A Net").
+* Columns B, C, D... (Rows 2+): The numerical data corresponding to the date and asset.
+
+NOTE ON RETURNS:
+All return and risk-free rate data should be entered as decimals (e.g., enter 0.015 for 1.5%, NOT 1.5).
+
+3. EXAMPLES
+-----------------------------------------------------
+
+EXAMPLE 1: "Returns" Sheet
+| Date       | Fund A | Fund B |
+| 1/31/2023  | 0.015  | 0.008  |
+| 2/28/2023  | -0.005 | 0.012  |
+
+EXAMPLE 2: "BM" Sheet
+| Date       | SP500  | NDX    |
+| 1/31/2023  | 0.012  | 0.018  |
+| 2/28/2023  | -0.010 | -0.015 |
+
+EXAMPLE 3: "Exposures" Sheet
+To utilize the dynamic filtering feature in the Exposures tab, ensure the column headers contain the EXACT name of the fund they belong to.
+| Date       | Fund A Net | Fund A Gross | Fund B Net |
+| 1/31/2023  | 35.5       | 120.0        | 15.0       |
+| 2/28/2023  | 38.0       | 115.5        | 12.0       |
+
+When you upload an Excel file formatted this way, the dashboard will automatically merge the new dates into your local database and correctly associate all the metrics.
