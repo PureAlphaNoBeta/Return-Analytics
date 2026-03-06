@@ -424,7 +424,7 @@ try:
                     if not s_fund.empty:
                         st.markdown(f"#### Monthly Returns Heatmap: {selected_fund_risk}")
                         df_hm = pd.DataFrame({'Return': s_fund})
-                        df_hm['Year'] = df_hm.index.year
+                        df_hm['Year'] = df_hm.index.year.astype(str)
                         df_hm['Month'] = df_hm.index.month_name().str[:3]
 
                         pivot = df_hm.pivot_table(index='Year', columns='Month', values='Return', aggfunc='sum')
@@ -433,6 +433,7 @@ try:
 
                         fig_hm = px.imshow(pivot, text_auto=".2%", aspect="auto", color_continuous_scale="RdYlGn",
                                         labels=dict(color="Return"))
+                        fig_hm.update_yaxes(type='category')
                         st.plotly_chart(fig_hm, use_container_width=True)
 
                         st.markdown("#### Distribution of Returns")
