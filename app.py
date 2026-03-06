@@ -30,6 +30,7 @@ with st.sidebar:
             cursor.execute("DROP TABLE IF EXISTS funds")
             cursor.execute("DROP TABLE IF EXISTS benchmarks")
             cursor.execute("DROP TABLE IF EXISTS risk_free")
+            cursor.execute("DROP TABLE IF EXISTS exposures")
             clear_conn.commit()
             clear_conn.close()
             
@@ -63,6 +64,7 @@ if uploaded_file is not None and "uploaded_data" not in st.session_state:
         returns_sheet = None
         bm_sheet = None
         rf_sheet = None
+        exp_sheet = None
         
         for sheet in xl.sheet_names:
             if 'return' in sheet.lower():
@@ -71,6 +73,8 @@ if uploaded_file is not None and "uploaded_data" not in st.session_state:
                 bm_sheet = sheet
             elif 'rf' in sheet.lower() or 'risk free' in sheet.lower() or 'risk-free' in sheet.lower():
                 rf_sheet = sheet
+            elif 'exp' in sheet.lower() or 'exposure' in sheet.lower():
+                exp_sheet = sheet
                 
         if not returns_sheet or not bm_sheet:
             st.error("Could not find required sheets. Please ensure one sheet contains 'Returns' and another 'BM' or 'Benchmark' in their names.")
@@ -88,6 +92,11 @@ if uploaded_file is not None and "uploaded_data" not in st.session_state:
                 df_rf = pd.read_excel(uploaded_file, sheet_name=rf_sheet, index_col=0, parse_dates=True)
                 df_rf.index = pd.to_datetime(df_rf.index).normalize()
                 update_db_table(df_rf, 'risk_free', conn)
+
+            if exp_sheet:
+                df_exp = pd.read_excel(uploaded_file, sheet_name=exp_sheet, index_col=0, parse_dates=True)
+                df_exp.index = pd.to_datetime(df_exp.index).normalize()
+                update_db_table(df_exp, 'exposures', conn)
                 
             st.session_state["uploaded_data"] = True
             st.success("Data successfully uploaded and categorized into the database!")
@@ -143,6 +152,9 @@ try:
         selected_rf = st.selectbox("Select Risk Free Rate", options=rf_options, index=0)
         
     selected_rf = None if selected_rf == "None" else selected_rf
+
+    # Set up Top-Level Tabs
+    tab_metrics, tab_growth, tab_risk, tab_exposures = st.tabs(["Metrics", "Growth & Drawdown", "Risk & Distribution", "Exposures"])
 
     if selected_funds or selected_bms:
         def determine_frequency(series):
@@ -289,118 +301,193 @@ try:
                     
             return metrics_df
 
-        t_ytd, t_1y, t_3y, t_5y, t_10y, t_itd = st.tabs(["YTD", "1 Year", "3 Year", "5 Year", "10 Year", "ITD"])
-        
-        with t_ytd:
-            df_ytd = generate_metrics_df('YTD')
-            if df_ytd is not None and not df_ytd.empty: 
-                st.dataframe(df_ytd, use_container_width=True)
-                st.download_button("Download YTD Metrics", convert_df_to_csv(df_ytd), "metrics_ytd.csv", "text/csv")
-            else: st.info("Not enough data for YTD analysis.")
-
-        with t_1y:
-            df_1y = generate_metrics_df(12)
-            if df_1y is not None and not df_1y.empty: 
-                st.dataframe(df_1y, use_container_width=True)
-                st.download_button("Download 1-Year Metrics", convert_df_to_csv(df_1y), "metrics_1y.csv", "text/csv")
-            else: st.info("Not enough data for 1-Year analysis.")
-
-        with t_3y:
-            df_3y = generate_metrics_df(36)
-            if df_3y is not None and not df_3y.empty: 
-                st.dataframe(df_3y, use_container_width=True)
-                st.download_button("Download 3-Year Metrics", convert_df_to_csv(df_3y), "metrics_3y.csv", "text/csv")
-            else: st.info("Not enough data for 3-Year analysis.")
-            
-        with t_5y:
-            df_5y = generate_metrics_df(60)
-            if df_5y is not None and not df_5y.empty: 
-                st.dataframe(df_5y, use_container_width=True)
-                st.download_button("Download 5-Year Metrics", convert_df_to_csv(df_5y), "metrics_5y.csv", "text/csv")
-            else: st.info("Not enough data for 5-Year analysis.")
-            
-        with t_10y:
-            df_10y = generate_metrics_df(120)
-            if df_10y is not None and not df_10y.empty: 
-                st.dataframe(df_10y, use_container_width=True)
-                st.download_button("Download 10-Year Metrics", convert_df_to_csv(df_10y), "metrics_10y.csv", "text/csv")
-            else: st.info("Not enough data for 10-Year analysis.")
-            
-        with t_itd:
-            df_itd = generate_metrics_df(None)
-            if df_itd is not None and not df_itd.empty: 
-                st.dataframe(df_itd, use_container_width=True)
-                st.download_button("Download ITD Metrics", convert_df_to_csv(df_itd), "metrics_itd.csv", "text/csv")
-            else: st.info("No data available.")
-
-        
-        # --- Interactive Charting Section ---
-        st.markdown("---")
-        st.subheader("Interactive Charts")
-        
-        valid_dates = df_merged[selected_funds + selected_bms].dropna(how='all').index
-        
-        if not valid_dates.empty:
-            min_date = valid_dates.min().to_pydatetime()
-            max_date = valid_dates.max().to_pydatetime()
-            
-            start_date, end_date = st.slider(
-                "Select Date Range for Charts",
-                min_value=min_date, max_value=max_date, value=(min_date, max_date), format="YYYY-MM-DD"
+        with tab_metrics:
+            time_horizon = st.radio(
+                "Select Time Horizon",
+                ["YTD", "1 Year", "3 Year", "5 Year", "10 Year", "ITD"],
+                horizontal=True
             )
+
+            if time_horizon == "YTD":
+                df_metrics = generate_metrics_df('YTD')
+                dl_key = "dl_ytd"
+            elif time_horizon == "1 Year":
+                df_metrics = generate_metrics_df(12)
+                dl_key = "dl_1y"
+            elif time_horizon == "3 Year":
+                df_metrics = generate_metrics_df(36)
+                dl_key = "dl_3y"
+            elif time_horizon == "5 Year":
+                df_metrics = generate_metrics_df(60)
+                dl_key = "dl_5y"
+            elif time_horizon == "10 Year":
+                df_metrics = generate_metrics_df(120)
+                dl_key = "dl_10y"
+            else: # ITD
+                df_metrics = generate_metrics_df(None)
+                dl_key = "dl_itd"
+
+            if df_metrics is not None and not df_metrics.empty:
+                st.dataframe(df_metrics, use_container_width=True)
+                st.download_button(
+                    f"Download {time_horizon} Metrics",
+                    convert_df_to_csv(df_metrics),
+                    f"metrics_{time_horizon.replace(' ', '_').lower()}.csv",
+                    "text/csv",
+                    key=dl_key
+                )
+            else:
+                st.info(f"Not enough data for {time_horizon} analysis.")
+
+        with tab_growth:
+            # --- Interactive Charting Section ---
+            st.subheader("Interactive Charts")
             
-            mask = (df_merged.index >= pd.to_datetime(start_date)) & (df_merged.index <= pd.to_datetime(end_date))
-            df_charting = df_merged.loc[mask]
-        else:
-            df_charting = df_merged.copy()
+            valid_dates = df_merged[selected_funds + selected_bms].dropna(how='all').index
+            
+            if not valid_dates.empty:
+                min_date = valid_dates.min().to_pydatetime()
+                max_date = valid_dates.max().to_pydatetime()
 
-        # Cumulative Growth Chart (Base 100)
-        index_df = pd.DataFrame(index=df_charting.index)
-        cols_to_plot = selected_funds + selected_bms
-        
-        for col in cols_to_plot:
-            s = df_charting[col].dropna()
-            if not s.empty:
-                index_df[col] = 100 * (1 + s).cumprod()
-                
-        if not index_df.empty:
-            index_df = index_df.ffill()
-            plot_idx_df = index_df.reset_index().melt(id_vars='Date', var_name='Asset', value_name='Index Value')
-            fig_idx = px.line(plot_idx_df, x='Date', y='Index Value', color='Asset', 
-                              title="Growth of 100", labels={'Index Value': 'Value (Base 100)'}, template="plotly_dark")
-            st.plotly_chart(fig_idx, use_container_width=True)
+                start_date, end_date = st.slider(
+                    "Select Date Range for Charts",
+                    min_value=min_date, max_value=max_date, value=(min_date, max_date), format="YYYY-MM-DD", key="growth_slider"
+                )
 
-        # Maximum Drawdown Chart
-        dd_df = pd.DataFrame(index=df_charting.index)
-        
-        for col in cols_to_plot:
-            s = df_charting[col].dropna()
-            if not s.empty:
-                cum_ret = (1 + s).cumprod()
-                peak = cum_ret.cummax()
-                drawdown = (cum_ret - peak) / peak
-                dd_df[col] = drawdown
-                
-        if not dd_df.empty:
-            plot_dd_df = dd_df.reset_index().melt(id_vars='Date', var_name='Asset', value_name='Drawdown')
-            fig_dd = px.line(plot_dd_df, x='Date', y='Drawdown', color='Asset', 
-                             title="Historical Drawdown", labels={'Drawdown': 'Drawdown %'}, template="plotly_dark")
-            fig_dd.update_layout(yaxis_tickformat='.1%')
-            st.plotly_chart(fig_dd, use_container_width=True)
+                mask = (df_merged.index >= pd.to_datetime(start_date)) & (df_merged.index <= pd.to_datetime(end_date))
+                df_charting = df_merged.loc[mask]
+            else:
+                df_charting = df_merged.copy()
 
-        # --- Export Underlying Data ---
-        st.markdown("---")
-        st.subheader("Export Raw Data")
-        st.write("Download the underlying return data for your currently selected assets.")
-        
-        df_export = df_merged[selected_funds + selected_bms].dropna(how='all')
-        if not df_export.empty:
-            st.download_button(
-                label="Download Selected Data (CSV)",
-                data=convert_df_to_csv(df_export),
-                file_name="underlying_returns_data.csv",
-                mime="text/csv"
-            )
+            # Cumulative Growth Chart (Base 100)
+            index_df = pd.DataFrame(index=df_charting.index)
+            cols_to_plot = selected_funds + selected_bms
+            
+            for col in cols_to_plot:
+                s = df_charting[col].dropna()
+                if not s.empty:
+                    index_df[col] = 100 * (1 + s).cumprod()
+
+            if not index_df.empty:
+                index_df = index_df.ffill()
+                plot_idx_df = index_df.reset_index().melt(id_vars='Date', var_name='Asset', value_name='Index Value')
+                fig_idx = px.line(plot_idx_df, x='Date', y='Index Value', color='Asset',
+                                title="Growth of 100", labels={'Index Value': 'Value (Base 100)'}, template="plotly_dark")
+                st.plotly_chart(fig_idx, use_container_width=True)
+
+            # Maximum Drawdown Chart
+            dd_df = pd.DataFrame(index=df_charting.index)
+            
+            for col in cols_to_plot:
+                s = df_charting[col].dropna()
+                if not s.empty:
+                    cum_ret = (1 + s).cumprod()
+                    peak = cum_ret.cummax()
+                    drawdown = (cum_ret - peak) / peak
+                    dd_df[col] = drawdown
+
+            if not dd_df.empty:
+                plot_dd_df = dd_df.reset_index().melt(id_vars='Date', var_name='Asset', value_name='Drawdown')
+                fig_dd = px.line(plot_dd_df, x='Date', y='Drawdown', color='Asset',
+                                title="Historical Drawdown", labels={'Drawdown': 'Drawdown %'}, template="plotly_dark")
+                fig_dd.update_layout(yaxis_tickformat='.1%')
+                st.plotly_chart(fig_dd, use_container_width=True)
+
+            # --- Export Underlying Data ---
+            st.markdown("---")
+            st.subheader("Export Raw Data")
+            st.write("Download the underlying return data for your currently selected assets.")
+            
+            df_export = df_merged[selected_funds + selected_bms].dropna(how='all')
+            if not df_export.empty:
+                st.download_button(
+                    label="Download Selected Data (CSV)",
+                    data=convert_df_to_csv(df_export),
+                    file_name="underlying_returns_data.csv",
+                    mime="text/csv",
+                    key="dl_raw"
+                )
+
+        with tab_risk:
+            st.subheader("Risk & Distribution")
+            if selected_funds:
+                selected_fund_risk = st.selectbox("Select Fund for Risk Analytics", options=selected_funds)
+                if selected_fund_risk:
+                    s_fund = df_merged[selected_fund_risk].dropna()
+                    if not s_fund.empty:
+                        st.markdown(f"#### Monthly Returns Heatmap: {selected_fund_risk}")
+                        df_hm = pd.DataFrame({'Return': s_fund})
+                        df_hm['Year'] = df_hm.index.year.astype(str)
+                        df_hm['Month'] = df_hm.index.month_name().str[:3]
+
+                        pivot = df_hm.pivot_table(index='Year', columns='Month', values='Return', aggfunc='sum')
+                        months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+                        pivot = pivot.reindex(columns=[m for m in months if m in pivot.columns])
+
+                        fig_hm = px.imshow(pivot, text_auto=".2%", aspect="auto", color_continuous_scale="RdYlGn",
+                                        labels=dict(color="Return"))
+                        fig_hm.update_yaxes(type='category')
+                        st.plotly_chart(fig_hm, use_container_width=True)
+
+                        st.markdown("#### Distribution of Returns")
+                        fig_hist = px.histogram(df_hm, x='Return', nbins=50, title=f"Return Distribution: {selected_fund_risk}",
+                                                marginal="box", template="plotly_dark")
+                        fig_hist.update_layout(xaxis_tickformat='.1%')
+                        st.plotly_chart(fig_hist, use_container_width=True)
+
+                        st.markdown("#### 12-Month Rolling Volatility")
+                        freq_name, ann_factor = determine_frequency(s_fund)
+                        # Assume 12 months roughly equivalent to ann_factor
+                        rolling_vol = s_fund.rolling(window=int(ann_factor)).std() * np.sqrt(ann_factor)
+                        rolling_vol = rolling_vol.dropna()
+                        if not rolling_vol.empty:
+                            df_vol = rolling_vol.reset_index()
+                            df_vol.columns = ['Date', 'Rolling Volatility']
+                            fig_vol = px.line(df_vol, x='Date', y='Rolling Volatility',
+                                              title=f"12-Month Rolling Volatility (Ann.): {selected_fund_risk}", template="plotly_dark")
+                            fig_vol.update_layout(yaxis_tickformat='.1%')
+                            st.plotly_chart(fig_vol, use_container_width=True)
+            else:
+                st.info("Please select at least one fund to view risk analytics.")
+
+        with tab_exposures:
+            st.subheader("Exposures")
+            try:
+                df_exposures = pd.read_sql("SELECT * FROM exposures", conn, index_col='Date', parse_dates=['Date'])
+                if not df_exposures.empty:
+                    exp_cols = df_exposures.columns.tolist()
+
+                    # Filter default exposures to only show ones related to selected funds
+                    default_exps = []
+                    if selected_funds:
+                        for col in exp_cols:
+                            if any(fund.lower() in col.lower() for fund in selected_funds):
+                                default_exps.append(col)
+                    # Fallback to all exposures if no matched ones are found (or none selected)
+                    if not default_exps:
+                        default_exps = exp_cols
+
+                    selected_exps = st.multiselect("Select Exposures to Visualize", options=exp_cols, default=default_exps)
+                    if selected_exps:
+                        # Summary Table
+                        st.markdown("#### Summary Statistics")
+                        summary_df = df_exposures[selected_exps].agg(['mean', 'median', 'min', 'max']).T
+                        # Format for readability
+                        for col in summary_df.columns:
+                            summary_df[col] = summary_df[col].apply(lambda x: f"{x:,.2f}")
+
+                        st.dataframe(summary_df, use_container_width=True)
+
+                        # Graph
+                        st.markdown("#### Historical Chart")
+                        plot_exp_df = df_exposures[selected_exps].reset_index().melt(id_vars='Date', var_name='Exposure Type', value_name='Value')
+                        fig_exp = px.line(plot_exp_df, x='Date', y='Value', color='Exposure Type',
+                                          title="Historical Exposures", template="plotly_dark")
+                        st.plotly_chart(fig_exp, use_container_width=True)
+                else:
+                    st.info("No exposure data available in the database.")
+            except Exception:
+                st.info("No exposure data available in the database.")
 
     else:
         st.info("Select funds or benchmarks to view analytics.")
