@@ -463,12 +463,22 @@ try:
                 df_exposures = pd.read_sql("SELECT * FROM exposures", conn, index_col='Date', parse_dates=['Date'])
                 if not df_exposures.empty:
                     exp_cols = df_exposures.columns.tolist()
-                    selected_exps = st.multiselect("Select Exposures to Visualize", options=exp_cols, default=exp_cols)
+
+                    # Filter default exposures to only show ones related to selected funds
+                    default_exps = []
+                    if selected_funds:
+                        for col in exp_cols:
+                            if any(fund.lower() in col.lower() for fund in selected_funds):
+                                default_exps.append(col)
+                    # Fallback to all exposures if no matched ones are found (or none selected)
+                    if not default_exps:
+                        default_exps = exp_cols
+
+                    selected_exps = st.multiselect("Select Exposures to Visualize", options=exp_cols, default=default_exps)
                     if selected_exps:
                         plot_exp_df = df_exposures[selected_exps].reset_index().melt(id_vars='Date', var_name='Exposure Type', value_name='Value')
                         fig_exp = px.line(plot_exp_df, x='Date', y='Value', color='Exposure Type',
                                           title="Historical Exposures", template="plotly_dark")
-                        # You can also use px.area if they are additive, but line is generally safer for net/gross
                         st.plotly_chart(fig_exp, use_container_width=True)
                 else:
                     st.info("No exposure data available in the database.")
