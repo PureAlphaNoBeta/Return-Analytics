@@ -469,17 +469,6 @@ try:
 
                     selected_exps = st.multiselect("Select Exposures to Visualize", options=exp_cols, default=default_exps)
                     if selected_exps:
-                        # Summary Table
-                        st.markdown("#### Summary Statistics")
-                        summary_df = df_exposures[selected_exps].agg(['mean', 'median', 'min', 'max']).T
-                        # Format for readability
-                        for col in summary_df.columns:
-                            summary_df[col] = summary_df[col].apply(lambda x: f"{x:,.2f}")
-
-                        st.dataframe(summary_df, use_container_width=True)
-
-                        # Graph
-                        st.markdown("#### Historical Chart")
                         plot_exp_df = df_exposures[selected_exps].reset_index().melt(id_vars='Date', var_name='Exposure Type', value_name='Value')
                         fig_exp = px.line(plot_exp_df, x='Date', y='Value', color='Exposure Type',
                                           title="Historical Exposures", template="plotly_dark")
