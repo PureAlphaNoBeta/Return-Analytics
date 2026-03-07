@@ -5,7 +5,7 @@ import plotly.express as px
 from datetime import timedelta
 import os
 import db_utils
-from metrics import generate_metrics_df, determine_frequency
+from metrics import generate_metrics_df, get_drawdown_table
 
 st.set_page_config(page_title="Performance Analytics", layout="wide")
 
@@ -125,7 +125,7 @@ try:
     selected_rf = None if selected_rf == "None" else selected_rf
 
     # Set up Top-Level Tabs
-    tab_metrics, tab_growth, tab_risk, tab_exposures = st.tabs(["Metrics", "Growth & Drawdown", "Risk & Distribution", "Exposures"])
+    tab_metrics, tab_growth, tab_risk, tab_exposures = st.tabs(["Metrics", "Total Return & Drawdown", "Risk & Distribution", "Exposures"])
 
     if selected_funds or selected_bms:
         with tab_metrics:
@@ -155,7 +155,35 @@ try:
                 dl_key = "dl_itd"
 
             if df_metrics is not None and not df_metrics.empty:
-                st.dataframe(df_metrics, use_container_width=True)
+                # Format the display, keep raw values
+                format_dict = {
+                    'Annualized Return': '{:.2%}', 'Volatility (Ann.)': '{:.2%}', 'Downside Vol (Ann.)': '{:.2%}',
+                    'Max Drawdown': '{:.2%}', 'VaR (5%)': '{:.2%}', 'CVaR (5%)': '{:.2%}', 'Alpha (Ann.)': '{:.2%}',
+                    'Tracking Error': '{:.2%}', 'Sharpe Ratio': '{:.2f}', 'Beta': '{:.2f}', 'Information Ratio': '{:.2f}',
+                    'Upside Capture': '{:.2f}', 'Downside Capture': '{:.2f}', 'Capture Ratio': '{:.2f}', 'Corr in Down Markets': '{:.2f}'
+                }
+
+                # Create a styling object using Streamlit's style capabilities
+                styled_df = df_metrics.style.format(format_dict, na_rep='N/A')
+
+                # Apply background gradient map for visual heatmap
+                # Higher is Better (Positive values are green, negative are red)
+                higher_is_better = ['Annualized Return', 'Sharpe Ratio', 'Alpha (Ann.)', 'Capture Ratio', 'Upside Capture', 'Information Ratio', 'Max Drawdown', 'VaR (5%)', 'CVaR (5%)']
+
+                # Lower is Better (Positive/high values are red, low/negative are green)
+                lower_is_better = ['Downside Capture', 'Corr in Down Markets']
+
+                for col in higher_is_better:
+                    if col in df_metrics.columns:
+                        styled_df = styled_df.background_gradient(subset=[col], cmap='RdYlGn', vmin=df_metrics[col].min(), vmax=df_metrics[col].max())
+
+                for col in lower_is_better:
+                    if col in df_metrics.columns:
+                        styled_df = styled_df.background_gradient(subset=[col], cmap='RdYlGn_r', vmin=df_metrics[col].min(), vmax=df_metrics[col].max())
+
+                st.dataframe(styled_df, use_container_width=True)
+
+                # Keep original float format for CSV download to avoid Excel errors
                 st.download_button(
                     f"Download {time_horizon} Metrics",
                     convert_df_to_csv(df_metrics),
@@ -201,6 +229,16 @@ try:
                 fig_idx = px.line(plot_idx_df, x='Date', y='Index Value', color='Asset',
                                 title="Growth of 100", labels={'Index Value': 'Value (Base 100)'}, template="plotly_dark")
                 st.plotly_chart(fig_idx, use_container_width=True)
+
+            # --- Drawdown Section ---
+            st.markdown("---")
+            st.subheader("Drawdown Analysis")
+
+            # Display Drawdown Table
+            st.markdown("#### Maximum Drawdown Details")
+            dd_table = get_drawdown_table(df_charting, cols_to_plot)
+            if not dd_table.empty:
+                st.dataframe(dd_table, use_container_width=True, hide_index=True)
 
             # Maximum Drawdown Chart
             dd_df = pd.DataFrame(index=df_charting.index)

@@ -10,7 +10,7 @@ def determine_frequency(series):
     elif median_days <= 31: return 'Monthly', 12
     else: return 'Yearly', 1
 
-def calc_metrics(series, freq_factor, period_months=None, rf_series=None, bm_series=None):
+def calc_metrics(series, freq_factor, freq_name, period_months=None, rf_series=None, bm_series=None):
     """
     Vectorizable helper wrapper around core financial calculations.
     For simplicity and backward compatibility, we wrap individual series calculations.
@@ -33,7 +33,7 @@ def calc_metrics(series, freq_factor, period_months=None, rf_series=None, bm_ser
     years = len(s) / freq_factor
 
     ann_ret = (1 + (1+s).cumprod().iloc[-1] - 1) ** (1/years) - 1 if years > 0 else np.nan
-    vol = s.std() * np.sqrt(freq_factor)
+    vol = s.std(ddof=1) * np.sqrt(freq_factor)
 
     if rf_series is not None:
         rf_s = rf_series.reindex(s.index).ffill().fillna(0)
@@ -43,7 +43,9 @@ def calc_metrics(series, freq_factor, period_months=None, rf_series=None, bm_ser
 
     excess_for_mar = s - rf_period_rate
     neg_returns = excess_for_mar[excess_for_mar < 0]
-    downside_vol = np.sqrt((neg_returns**2).sum() / len(s)) * np.sqrt(freq_factor) if not neg_returns.empty else 0.0
+    # Use N-1 for downside volatility as requested
+    down_vol_denom = len(s) - 1 if len(s) > 1 else 1
+    downside_vol = np.sqrt((neg_returns**2).sum() / down_vol_denom) * np.sqrt(freq_factor) if not neg_returns.empty else 0.0
 
     cum_ret = (1 + s).cumprod()
     peak = cum_ret.cummax()
@@ -89,17 +91,15 @@ def calc_metrics(series, freq_factor, period_months=None, rf_series=None, bm_ser
                  cap_ratio = up_cap / np.abs(down_cap)
 
             active_returns = s_aligned - bm_aligned
-            tracking_error = active_returns.std() * np.sqrt(freq_factor)
+            tracking_error = active_returns.std(ddof=1) * np.sqrt(freq_factor)
             annualized_active = active_returns.mean() * freq_factor
             info_ratio = annualized_active / tracking_error if tracking_error != 0 else np.nan
 
-            if rf_series is not None:
-                rf_aligned = rf_period_rate.loc[common_idx].fillna(0)
-                s_adj, bm_adj = s_aligned - rf_aligned, bm_aligned - rf_aligned
-            else:
-                s_adj, bm_adj = s_aligned, bm_aligned
+            # CAPM Beta requires risk-free rate
+            rf_aligned = rf_period_rate.loc[common_idx].fillna(0)
+            s_adj, bm_adj = s_aligned - rf_aligned, bm_aligned - rf_aligned
 
-            cov_matrix = np.cov(s_adj, bm_adj)
+            cov_matrix = np.cov(s_adj, bm_adj, ddof=1)
             if cov_matrix[1, 1] != 0:
                 beta = cov_matrix[0, 1] / cov_matrix[1, 1]
                 alpha = (s_adj.mean() - beta * bm_adj.mean()) * freq_factor
@@ -108,14 +108,48 @@ def calc_metrics(series, freq_factor, period_months=None, rf_series=None, bm_ser
             if len(falling_idx) >= 2: corr_falling = s_aligned.loc[falling_idx].corr(bm_aligned.loc[falling_idx])
 
     return pd.Series({
+        'Frequency': freq_name,
         'Annualized Return': ann_ret, 'Volatility (Ann.)': vol, 'Downside Vol (Ann.)': downside_vol,
         'Max Drawdown': max_drawdown, 'Drawdown Start': dd_start.strftime('%Y-%m-%d') if pd.notna(dd_start) else 'N/A',
         'Drawdown End': dd_end.strftime('%Y-%m-%d') if pd.notna(dd_end) else 'N/A',
-        'Drawdown Length (Days)': dd_length, 'Sharpe Ratio': sharpe, 'Value at Risk (5%)': var_val,
-        'Conditional VaR (5%)': cvar_val, 'Beta': beta, 'Alpha (Ann.)': alpha, 'Tracking Error': tracking_error,
+        'Drawdown Length (Days)': dd_length, 'Sharpe Ratio': sharpe, 'VaR (5%)': var_val,
+        'CVaR (5%)': cvar_val, 'Beta': beta, 'Alpha (Ann.)': alpha, 'Tracking Error': tracking_error,
         'Information Ratio': info_ratio, 'Upside Capture': up_cap, 'Downside Capture': down_cap,
         'Capture Ratio': cap_ratio, 'Corr in Down Markets': corr_falling
     })
+
+def get_drawdown_table(df_merged, selected_assets):
+    """
+    Returns a DataFrame containing the maximum drawdown details.
+    """
+    dd_list = []
+    for col in selected_assets:
+        s = df_merged[col].dropna()
+        if s.empty: continue
+
+        cum_ret = (1 + s).cumprod()
+        peak = cum_ret.cummax()
+        drawdown = (cum_ret - peak) / peak
+        max_drawdown = drawdown.min()
+
+        dd_end = drawdown.idxmin()
+        if pd.notna(dd_end):
+            dd_start = peak.loc[:dd_end].idxmax()
+            recovery_df = drawdown.loc[dd_end:]
+            recovery_dates = recovery_df[recovery_df == 0].index
+            dd_recovery = recovery_dates[0] if len(recovery_dates) > 0 else pd.NaT
+            dd_length = (dd_recovery - dd_start).days if pd.notna(dd_recovery) else (s.index[-1] - dd_start).days
+        else:
+            dd_start, dd_recovery, dd_length = pd.NaT, pd.NaT, np.nan
+
+        dd_list.append({
+            'Asset': col,
+            'Max Drawdown': f"{max_drawdown*100:.2f}%" if pd.notna(max_drawdown) else "N/A",
+            'Drawdown Start': dd_start.strftime('%Y-%m-%d') if pd.notna(dd_start) else 'N/A',
+            'Drawdown End': dd_end.strftime('%Y-%m-%d') if pd.notna(dd_end) else 'N/A',
+            'Drawdown Length (Days)': int(dd_length) if pd.notna(dd_length) else "N/A"
+        })
+    return pd.DataFrame(dd_list)
 
 def generate_metrics_df(df_merged, selected_funds, selected_bms, selected_rf, period_months):
     metrics_list = []
@@ -127,23 +161,15 @@ def generate_metrics_df(df_merged, selected_funds, selected_bms, selected_rf, pe
         if df_merged[col].dropna().empty: continue
         freq_name, ann_factor = determine_frequency(df_merged[col])
         bm_series = df_merged[primary_bm] if primary_bm and col != primary_bm and primary_bm in df_merged.columns else None
-        res = calc_metrics(df_merged[col], ann_factor, period_months, rf_series=rf_series, bm_series=bm_series)
+        res = calc_metrics(df_merged[col], ann_factor, freq_name, period_months, rf_series=rf_series, bm_series=bm_series)
         if not res.empty:
+            # Drop the drawdown details from the metrics tab dataframe
+            res = res.drop(['Drawdown Start', 'Drawdown End', 'Drawdown Length (Days)'])
             res.name = col
             metrics_list.append(res)
 
     if not metrics_list: return None
     metrics_df = pd.DataFrame(metrics_list)
 
-    def format_pct(x): return f"{float(x)*100:.2f}%" if pd.notnull(x) else "N/A"
-    def format_dec(x): return f"{float(x):.2f}" if pd.notnull(x) else "N/A"
-
-    pct_cols = ['Annualized Return', 'Volatility (Ann.)', 'Downside Vol (Ann.)', 'Max Drawdown', 'Value at Risk (5%)', 'Conditional VaR (5%)', 'Alpha (Ann.)', 'Tracking Error']
-    for c in pct_cols:
-        if c in metrics_df.columns: metrics_df[c] = metrics_df[c].apply(format_pct)
-
-    dec_cols = ['Sharpe Ratio', 'Beta', 'Information Ratio', 'Upside Capture', 'Downside Capture', 'Capture Ratio', 'Corr in Down Markets', 'Drawdown Length (Days)']
-    for c in dec_cols:
-        if c in metrics_df.columns: metrics_df[c] = metrics_df[c].apply(format_dec)
-
+    # We will let the Streamlit formatting layer handle the string formatting so we can color-code the raw floats
     return metrics_df
