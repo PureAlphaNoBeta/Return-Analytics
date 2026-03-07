@@ -24,8 +24,11 @@ Every sheet must follow the exact same tabular structure:
 * Columns B, C, D... (Row 1): The names of the specific assets/metrics (e.g., "Fund A", "SP500", "Fund A Net").
 * Columns B, C, D... (Rows 2+): The numerical data corresponding to the date and asset.
 
-NOTE ON RETURNS:
+NOTE ON RETURNS AND RISK-FREE RATES:
 All return and risk-free rate data should be entered as decimals (e.g., enter 0.015 for 1.5%, NOT 1.5).
+
+IMPORTANT: Risk-free rate data MUST be entered as the *actual return per period*, not as an annualized yield.
+For example, if the annualized risk-free rate is 4.8% (0.048), the monthly risk-free return entered into the sheet should be approximately 0.4% (0.004).
 
 3. EXAMPLES
 -----------------------------------------------------
