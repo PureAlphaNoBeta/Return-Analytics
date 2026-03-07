@@ -164,7 +164,7 @@ def generate_metrics_df(df_merged, selected_funds, selected_bms, selected_rf, pe
         res = calc_metrics(df_merged[col], ann_factor, freq_name, period_months, rf_series=rf_series, bm_series=bm_series)
         if not res.empty:
             # Drop the drawdown details from the metrics tab dataframe
-            res = res.drop(['Drawdown Start', 'Drawdown End', 'Drawdown Length (Days)'])
+            res = res.drop(labels=['Drawdown Start', 'Drawdown End', 'Drawdown Length (Days)'], errors='ignore')
             res.name = col
             metrics_list.append(res)
 

@@ -5,7 +5,7 @@ import plotly.express as px
 from datetime import timedelta
 import os
 import db_utils
-from metrics import generate_metrics_df, get_drawdown_table
+from metrics import generate_metrics_df, get_drawdown_table, determine_frequency
 
 st.set_page_config(page_title="Performance Analytics", layout="wide")
 
