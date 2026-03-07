@@ -1,10 +1,11 @@
 import streamlit as st
 import pandas as pd
-import sqlite3
 import numpy as np
 import plotly.express as px
 from datetime import timedelta
 import os
+import db_utils
+from metrics import generate_metrics_df, get_drawdown_table, determine_frequency
 
 st.set_page_config(page_title="Performance Analytics", layout="wide")
 
@@ -20,23 +21,17 @@ db_path = 'data/performance_data.db'
 def convert_df_to_csv(df):
     return df.to_csv(index=True).encode('utf-8')
 
+# Ensure tables exist
+db_utils.init_db(db_path)
+
 # --- Database Management ---
 with st.sidebar:
     st.header("Database Settings")
     if st.button("Clear Database", type="primary"):
         try:
-            clear_conn = sqlite3.connect(db_path)
-            cursor = clear_conn.cursor()
-            cursor.execute("DROP TABLE IF EXISTS funds")
-            cursor.execute("DROP TABLE IF EXISTS benchmarks")
-            cursor.execute("DROP TABLE IF EXISTS risk_free")
-            cursor.execute("DROP TABLE IF EXISTS exposures")
-            clear_conn.commit()
-            clear_conn.close()
-            
+            db_utils.clear_db(db_path)
             if "uploaded_data" in st.session_state:
                 del st.session_state["uploaded_data"]
-                
             st.success("Database successfully cleared!")
             st.rerun()
         except Exception as e:
@@ -44,18 +39,6 @@ with st.sidebar:
 
 # --- File Upload & Processing ---
 uploaded_file = st.file_uploader("Upload Excel File", type=["xlsx", "xls"])
-
-conn = sqlite3.connect(db_path)
-
-def update_db_table(df_new, table_name, connection):
-    df_new.index.name = 'Date'
-    try:
-        df_existing = pd.read_sql(f"SELECT * FROM {table_name}", connection, index_col='Date', parse_dates=['Date'])
-        df_existing.index = pd.to_datetime(df_existing.index).normalize()
-        df_final = df_new.combine_first(df_existing)
-    except Exception:
-        df_final = df_new
-    df_final.to_sql(table_name, connection, if_exists='replace', index=True)
 
 if uploaded_file is not None and "uploaded_data" not in st.session_state:
     try:
@@ -85,18 +68,18 @@ if uploaded_file is not None and "uploaded_data" not in st.session_state:
             df_returns.index = pd.to_datetime(df_returns.index).normalize()
             df_bm.index = pd.to_datetime(df_bm.index).normalize()
             
-            update_db_table(df_returns, 'funds', conn)
-            update_db_table(df_bm, 'benchmarks', conn)
+            db_utils.update_db_table(df_returns, 'funds', db_path)
+            db_utils.update_db_table(df_bm, 'benchmarks', db_path)
             
             if rf_sheet:
                 df_rf = pd.read_excel(uploaded_file, sheet_name=rf_sheet, index_col=0, parse_dates=True)
                 df_rf.index = pd.to_datetime(df_rf.index).normalize()
-                update_db_table(df_rf, 'risk_free', conn)
+                db_utils.update_db_table(df_rf, 'risk_free', db_path)
 
             if exp_sheet:
                 df_exp = pd.read_excel(uploaded_file, sheet_name=exp_sheet, index_col=0, parse_dates=True)
                 df_exp.index = pd.to_datetime(df_exp.index).normalize()
-                update_db_table(df_exp, 'exposures', conn)
+                db_utils.update_db_table(df_exp, 'exposures', db_path)
                 
             st.session_state["uploaded_data"] = True
             st.success("Data successfully uploaded and categorized into the database!")
@@ -108,26 +91,14 @@ if uploaded_file is not None and "uploaded_data" not in st.session_state:
 st.header("Performance Metrics")
 
 try:
-    try:
-        df_funds = pd.read_sql("SELECT * FROM funds", conn, index_col='Date', parse_dates=['Date'])
-        fund_cols = df_funds.columns.tolist()
-    except Exception:
-        df_funds = pd.DataFrame()
-        fund_cols = []
-        
-    try:
-        df_bms = pd.read_sql("SELECT * FROM benchmarks", conn, index_col='Date', parse_dates=['Date'])
-        bm_cols = df_bms.columns.tolist()
-    except Exception:
-        df_bms = pd.DataFrame()
-        bm_cols = []
-        
-    try:
-        df_rfs = pd.read_sql("SELECT * FROM risk_free", conn, index_col='Date', parse_dates=['Date'])
-        rf_cols = df_rfs.columns.tolist()
-    except Exception:
-        df_rfs = pd.DataFrame()
-        rf_cols = []
+    df_funds = db_utils.get_data_by_category('funds', db_path)
+    fund_cols = df_funds.columns.tolist() if not df_funds.empty else []
+
+    df_bms = db_utils.get_data_by_category('benchmarks', db_path)
+    bm_cols = df_bms.columns.tolist() if not df_bms.empty else []
+
+    df_rfs = db_utils.get_data_by_category('risk_free', db_path)
+    rf_cols = df_rfs.columns.tolist() if not df_rfs.empty else []
 
     if df_funds.empty and df_bms.empty:
         st.info("No data available yet. Please upload an Excel file.")
@@ -154,153 +125,9 @@ try:
     selected_rf = None if selected_rf == "None" else selected_rf
 
     # Set up Top-Level Tabs
-    tab_metrics, tab_growth, tab_risk, tab_exposures = st.tabs(["Metrics", "Growth & Drawdown", "Risk & Distribution", "Exposures"])
+    tab_metrics, tab_growth, tab_risk, tab_exposures = st.tabs(["Metrics", "Total Return & Drawdown", "Risk & Distribution", "Exposures"])
 
     if selected_funds or selected_bms:
-        def determine_frequency(series):
-            s_clean = series.dropna()
-            if len(s_clean) < 2: return 'Monthly', 12
-            median_days = s_clean.index.to_series().diff().dt.days.median()
-            if median_days <= 5: return 'Daily', 252
-            elif median_days <= 10: return 'Weekly', 52
-            elif median_days <= 31: return 'Monthly', 12
-            else: return 'Yearly', 1
-        
-        def calc_metrics(series, freq_factor, period_months=None, rf_series=None, bm_series=None):
-            s = series.dropna()
-            if period_months is not None:
-                end_date = s.index[-1]
-                if period_months == 'YTD':
-                    start_date = pd.to_datetime(f"{end_date.year}-12-31") - pd.DateOffset(years=1)
-                    s = s[s.index > start_date]
-                    if len(s) < 1: return pd.Series(dtype='float64')
-                else:
-                    start_date = end_date - pd.DateOffset(months=period_months)
-                    s = s[s.index >= start_date]
-                    if len(s) < 2 or (end_date - s.index[0]).days < (period_months * 30 * 0.9): 
-                         return pd.Series(dtype='float64')
-
-            if s.empty: return pd.Series(dtype='float64')
-            
-            years = (s.index[-1] - s.index[0]).days / 365.25
-            ann_ret = (1 + (1+s).cumprod().iloc[-1] - 1) ** (1/years) - 1 if years > 0 else np.nan
-            vol = s.std() * np.sqrt(freq_factor)
-            
-            neg_returns = s[s < 0]
-            downside_vol = np.sqrt((neg_returns**2).sum() / len(s)) * np.sqrt(freq_factor) if not neg_returns.empty else 0.0
-
-            cum_ret = (1 + s).cumprod()
-            peak = cum_ret.cummax()
-            drawdown = (cum_ret - peak) / peak
-            max_drawdown = drawdown.min()
-            
-            dd_end = drawdown.idxmin()
-            if pd.notna(dd_end):
-                dd_start = peak.loc[:dd_end].idxmax()
-                recovery_df = drawdown.loc[dd_end:]
-                recovery_dates = recovery_df[recovery_df == 0].index
-                dd_recovery = recovery_dates[0] if len(recovery_dates) > 0 else pd.NaT
-                dd_length = (dd_recovery - dd_start).days if pd.notna(dd_recovery) else (s.index[-1] - dd_start).days
-            else:
-                dd_start, dd_recovery, dd_length = pd.NaT, pd.NaT, np.nan
-            
-            sharpe = np.nan
-            if rf_series is not None:
-                 rf_s = rf_series.reindex(s.index).ffill().fillna(0)
-                 rf_period_rate = rf_s.shift(1) / freq_factor
-                 rf_period_rate.iloc[0] = rf_s.iloc[0] / freq_factor
-                 ex_ret = s - rf_period_rate
-                 sharpe = (ex_ret.mean() / ex_ret.std()) * np.sqrt(freq_factor) if ex_ret.std() != 0 else np.nan
-            else:
-                 sharpe = (s.mean() / s.std()) * np.sqrt(freq_factor) if s.std() != 0 else np.nan
-
-            up_cap, down_cap, cap_ratio, beta, alpha, tracking_error, info_ratio, corr_falling = [np.nan]*8
-            var_alpha = 0.05
-            var_val = np.percentile(s, var_alpha * 100) if not s.empty else np.nan
-            cvar_val = s[s <= var_val].mean() if pd.notna(var_val) and len(s[s <= var_val]) > 0 else np.nan
-
-            if bm_series is not None:
-                bm_s = bm_series.reindex(s.index).dropna()
-                if not bm_s.empty:
-                    common_idx = s.index.intersection(bm_s.index)
-                    s_aligned, bm_aligned = s.loc[common_idx], bm_s.loc[common_idx]
-                    up_months, down_months = bm_aligned > 0, bm_aligned <= 0
-                    
-                    if up_months.sum() > 0:
-                        count_up = up_months.sum()
-                        s_up_ret = (1 + s_aligned[up_months]).prod() ** (freq_factor / count_up) - 1
-                        bm_up_ret = (1 + bm_aligned[up_months]).prod() ** (freq_factor / count_up) - 1
-                        up_cap = s_up_ret / bm_up_ret if bm_up_ret != 0 else np.nan
-                        
-                    if down_months.sum() > 0:
-                        count_down = down_months.sum()
-                        s_down_ret = (1 + s_aligned[down_months]).prod() ** (freq_factor / count_down) - 1
-                        bm_down_ret = (1 + bm_aligned[down_months]).prod() ** (freq_factor / count_down) - 1
-                        down_cap = s_down_ret / bm_down_ret if bm_down_ret != 0 else np.nan
-                        
-                    if pd.notna(up_cap) and pd.notna(down_cap) and down_cap != 0:
-                         cap_ratio = up_cap / np.abs(down_cap)
-                         
-                    active_returns = s_aligned - bm_aligned
-                    tracking_error = active_returns.std() * np.sqrt(freq_factor)
-                    annualized_active = active_returns.mean() * freq_factor
-                    info_ratio = annualized_active / tracking_error if tracking_error != 0 else np.nan
-
-                    if rf_series is not None:
-                        rf_aligned = rf_period_rate.loc[common_idx].fillna(0)
-                        s_adj, bm_adj = s_aligned - rf_aligned, bm_aligned - rf_aligned
-                    else:
-                        s_adj, bm_adj = s_aligned, bm_aligned
-                        
-                    cov_matrix = np.cov(s_adj, bm_adj)
-                    if cov_matrix[1, 1] != 0:
-                        beta = cov_matrix[0, 1] / cov_matrix[1, 1]
-                        alpha = (s_adj.mean() - beta * bm_adj.mean()) * freq_factor
-
-                    falling_idx = bm_aligned[bm_aligned < 0].index
-                    if len(falling_idx) >= 2: corr_falling = s_aligned.loc[falling_idx].corr(bm_aligned.loc[falling_idx])
-
-            return pd.Series({
-                'Annualized Return': ann_ret, 'Volatility (Ann.)': vol, 'Downside Vol (Ann.)': downside_vol,
-                'Max Drawdown': max_drawdown, 'Drawdown Start': dd_start.strftime('%Y-%m-%d') if pd.notna(dd_start) else 'N/A',
-                'Drawdown End': dd_end.strftime('%Y-%m-%d') if pd.notna(dd_end) else 'N/A',
-                'Drawdown Length (Days)': dd_length, 'Sharpe Ratio': sharpe, 'Value at Risk (5%)': var_val,
-                'Conditional VaR (5%)': cvar_val, 'Beta': beta, 'Alpha (Ann.)': alpha, 'Tracking Error': tracking_error,
-                'Information Ratio': info_ratio, 'Upside Capture': up_cap, 'Downside Capture': down_cap,
-                'Capture Ratio': cap_ratio, 'Corr in Down Markets': corr_falling
-            })
-            
-        def generate_metrics_df(period_months):
-            metrics_list = []
-            primary_bm = selected_bms[0] if selected_bms else None
-            rf_series = df_merged[selected_rf] if selected_rf else None
-            cols_to_analyze = selected_funds + selected_bms
-            
-            for col in cols_to_analyze:
-                if df_merged[col].dropna().empty: continue
-                freq_name, ann_factor = determine_frequency(df_merged[col])
-                bm_series = df_merged[primary_bm] if primary_bm and col != primary_bm and primary_bm in df_merged.columns else None
-                res = calc_metrics(df_merged[col], ann_factor, period_months, rf_series=rf_series, bm_series=bm_series)
-                if not res.empty:
-                    res.name = col
-                    metrics_list.append(res)
-                
-            if not metrics_list: return None
-            metrics_df = pd.DataFrame(metrics_list)
-            
-            def format_pct(x): return f"{float(x)*100:.2f}%" if pd.notnull(x) else "N/A"
-            def format_dec(x): return f"{float(x):.2f}" if pd.notnull(x) else "N/A"
-
-            pct_cols = ['Annualized Return', 'Volatility (Ann.)', 'Downside Vol (Ann.)', 'Max Drawdown', 'Value at Risk (5%)', 'Conditional VaR (5%)', 'Alpha (Ann.)', 'Tracking Error']
-            for c in pct_cols:
-                if c in metrics_df.columns: metrics_df[c] = metrics_df[c].apply(format_pct)
-            
-            dec_cols = ['Sharpe Ratio', 'Beta', 'Information Ratio', 'Upside Capture', 'Downside Capture', 'Capture Ratio', 'Corr in Down Markets', 'Drawdown Length (Days)']
-            for c in dec_cols:
-                if c in metrics_df.columns: metrics_df[c] = metrics_df[c].apply(format_dec)
-                    
-            return metrics_df
-
         with tab_metrics:
             time_horizon = st.radio(
                 "Select Time Horizon",
@@ -309,26 +136,54 @@ try:
             )
 
             if time_horizon == "YTD":
-                df_metrics = generate_metrics_df('YTD')
+                df_metrics = generate_metrics_df(df_merged, selected_funds, selected_bms, selected_rf, 'YTD')
                 dl_key = "dl_ytd"
             elif time_horizon == "1 Year":
-                df_metrics = generate_metrics_df(12)
+                df_metrics = generate_metrics_df(df_merged, selected_funds, selected_bms, selected_rf, 12)
                 dl_key = "dl_1y"
             elif time_horizon == "3 Year":
-                df_metrics = generate_metrics_df(36)
+                df_metrics = generate_metrics_df(df_merged, selected_funds, selected_bms, selected_rf, 36)
                 dl_key = "dl_3y"
             elif time_horizon == "5 Year":
-                df_metrics = generate_metrics_df(60)
+                df_metrics = generate_metrics_df(df_merged, selected_funds, selected_bms, selected_rf, 60)
                 dl_key = "dl_5y"
             elif time_horizon == "10 Year":
-                df_metrics = generate_metrics_df(120)
+                df_metrics = generate_metrics_df(df_merged, selected_funds, selected_bms, selected_rf, 120)
                 dl_key = "dl_10y"
             else: # ITD
-                df_metrics = generate_metrics_df(None)
+                df_metrics = generate_metrics_df(df_merged, selected_funds, selected_bms, selected_rf, None)
                 dl_key = "dl_itd"
 
             if df_metrics is not None and not df_metrics.empty:
-                st.dataframe(df_metrics, use_container_width=True)
+                # Format the display, keep raw values
+                format_dict = {
+                    'Annualized Return': '{:.2%}', 'Volatility (Ann.)': '{:.2%}', 'Downside Vol (Ann.)': '{:.2%}',
+                    'Max Drawdown': '{:.2%}', 'VaR (5%)': '{:.2%}', 'CVaR (5%)': '{:.2%}', 'Alpha (Ann.)': '{:.2%}',
+                    'Tracking Error': '{:.2%}', 'Sharpe Ratio': '{:.2f}', 'Beta': '{:.2f}', 'Information Ratio': '{:.2f}',
+                    'Upside Capture': '{:.2f}', 'Downside Capture': '{:.2f}', 'Capture Ratio': '{:.2f}', 'Corr in Down Markets': '{:.2f}'
+                }
+
+                # Create a styling object using Streamlit's style capabilities
+                styled_df = df_metrics.style.format(format_dict, na_rep='N/A')
+
+                # Apply background gradient map for visual heatmap
+                # Higher is Better (Positive values are green, negative are red)
+                higher_is_better = ['Annualized Return', 'Sharpe Ratio', 'Alpha (Ann.)', 'Capture Ratio', 'Upside Capture', 'Information Ratio', 'Max Drawdown', 'VaR (5%)', 'CVaR (5%)']
+
+                # Lower is Better (Positive/high values are red, low/negative are green)
+                lower_is_better = ['Downside Capture', 'Corr in Down Markets']
+
+                for col in higher_is_better:
+                    if col in df_metrics.columns:
+                        styled_df = styled_df.background_gradient(subset=[col], cmap='RdYlGn', vmin=df_metrics[col].min(), vmax=df_metrics[col].max())
+
+                for col in lower_is_better:
+                    if col in df_metrics.columns:
+                        styled_df = styled_df.background_gradient(subset=[col], cmap='RdYlGn_r', vmin=df_metrics[col].min(), vmax=df_metrics[col].max())
+
+                st.dataframe(styled_df, use_container_width=True)
+
+                # Keep original float format for CSV download to avoid Excel errors
                 st.download_button(
                     f"Download {time_horizon} Metrics",
                     convert_df_to_csv(df_metrics),
@@ -374,6 +229,16 @@ try:
                 fig_idx = px.line(plot_idx_df, x='Date', y='Index Value', color='Asset',
                                 title="Growth of 100", labels={'Index Value': 'Value (Base 100)'}, template="plotly_dark")
                 st.plotly_chart(fig_idx, use_container_width=True)
+
+            # --- Drawdown Section ---
+            st.markdown("---")
+            st.subheader("Drawdown Analysis")
+
+            # Display Drawdown Table
+            st.markdown("#### Maximum Drawdown Details")
+            dd_table = get_drawdown_table(df_charting, cols_to_plot)
+            if not dd_table.empty:
+                st.dataframe(dd_table, use_container_width=True, hide_index=True)
 
             # Maximum Drawdown Chart
             dd_df = pd.DataFrame(index=df_charting.index)
@@ -453,7 +318,7 @@ try:
         with tab_exposures:
             st.subheader("Exposures")
             try:
-                df_exposures = pd.read_sql("SELECT * FROM exposures", conn, index_col='Date', parse_dates=['Date'])
+                df_exposures = db_utils.get_data_by_category('exposures', db_path)
                 if not df_exposures.empty:
                     exp_cols = df_exposures.columns.tolist()
 
@@ -494,8 +359,3 @@ try:
 
 except Exception as e:
     st.error(f"Error calculating metrics: {e}")
-finally:
-    try:
-        conn.close()
-    except Exception:
-        pass
