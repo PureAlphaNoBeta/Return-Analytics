@@ -27,7 +27,7 @@ db_utils.init_db(db_path)
 # --- Database Management ---
 with st.sidebar:
     st.header("Database Settings")
-    if st.button("Clear Database", type="primary"):
+    if st.button("Clear Database", type="primary", help="Warning: This will permanently delete all uploaded data from the database."):
         try:
             db_utils.clear_db(db_path)
             if "uploaded_data" in st.session_state:
@@ -38,7 +38,7 @@ with st.sidebar:
             st.error(f"Error clearing database: {e}")
 
 # --- File Upload & Processing ---
-uploaded_file = st.file_uploader("Upload Excel File", type=["xlsx", "xls"])
+uploaded_file = st.file_uploader("Upload Excel File", type=["xlsx", "xls"], help="Upload an Excel file containing return data and benchmark data. Ensure sheets are named appropriately (e.g., 'Returns', 'Benchmark').")
 
 if uploaded_file is not None and "uploaded_data" not in st.session_state:
     try:
@@ -115,12 +115,12 @@ try:
     
     col1, col2, col3 = st.columns(3)
     with col1:
-        selected_funds = st.multiselect("Select Funds to Analyze", options=fund_cols, default=[])
+        selected_funds = st.multiselect("Select Funds to Analyze", options=fund_cols, default=[], help="Select one or more funds to calculate performance metrics for.")
     with col2:
-        selected_bms = st.multiselect("Select Benchmarks to Analyze", options=bm_cols, default=[])
+        selected_bms = st.multiselect("Select Benchmarks to Analyze", options=bm_cols, default=[], help="Select one or more benchmarks to compare the funds against (used for Alpha, Beta, etc.).")
     with col3:
         rf_options = ["None"] + rf_cols
-        selected_rf = st.selectbox("Select Risk Free Rate", options=rf_options, index=0)
+        selected_rf = st.selectbox("Select Risk Free Rate", options=rf_options, index=0, help="Select a risk-free rate series to use for excess return calculations (e.g., Sharpe Ratio).")
         
     selected_rf = None if selected_rf == "None" else selected_rf
 
@@ -132,7 +132,8 @@ try:
             time_horizon = st.radio(
                 "Select Time Horizon",
                 ["YTD", "1 Year", "3 Year", "5 Year", "10 Year", "ITD"],
-                horizontal=True
+                horizontal=True,
+                help="Select the time period for the metrics. ITD = Inception to Date (all available data)."
             )
 
             if time_horizon == "YTD":
